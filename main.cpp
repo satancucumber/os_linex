@@ -15,6 +15,8 @@ using namespace std;
 
 off_t  block_size = 4096;
 int cnt_aio, file_size;
+int cnt_end_aio = 0;
+long increment;
 
 struct aio_operation {
     struct aiocb aio;
@@ -29,29 +31,34 @@ void getLastError() {
 }
 
 void aio_completion_handler(sigval_t sigval) {
+//    cout << "1" << endl;
     struct aio_operation *aio_op = (struct aio_operation *)sigval.sival_ptr;
     struct aio_operation *next = aio_op->next_operation;
-
+    aio_op->aio.aio_offset += increment;
     if (aio_op->write_operation) {
         to_string(*aio_op->buffer).clear();
         // операция записи
         file_size = file_size - aio_return(&aio_op->aio);
-        cout<<"Filesize:"<<file_size<<endl;
+//        cout << "File size: " << file_size << endl;
         if (file_size <= block_size) {
             aio_op->aio.aio_nbytes = file_size;
             next->aio.aio_nbytes = file_size;
         }
-        aio_op->aio.aio_offset = aio_op->aio.aio_offset + block_size * cnt_aio;
-        next->aio.aio_offset = next->aio.aio_offset + block_size * cnt_aio;
+//        cout << "Offset: " << aio_op->aio.aio_offset << " " << next->aio.aio_offset << endl;
         if (aio_read(&next->aio) == -1) {
             getLastError();
         }
     } else {
+        long read_return = aio_return(&aio_op->aio);
+//        cout << "Read: " << read_return << endl;
         //операция чтения
-        if (aio_return(&aio_op->aio) != 0) {
+        if (read_return > 0) {
             if (aio_write(&next->aio) == -1) {
                 getLastError();
             }
+        }
+        else {
+            cnt_end_aio += 1;
         }
     }
 }
@@ -75,14 +82,17 @@ int main() {
     cout << "Count asynchronous operation: ";
     cin >> cnt_aio;
 
+    block_size = block_size * cnt_block;
+
+    increment = block_size * cnt_aio;
+//    cout << increment << endl;
+
     vector<aiocb> aiocb_read_list, aiocb_write_list;
     vector<string> buf_list;
     vector<aio_operation> aio_op_list(cnt_aio * 2);
 
-    block_size = block_size * cnt_block;
-
     cout << "Read file name" << endl;
-    read_filename = getFileName();
+    read_filename = "/home/milana/Downloads/read_test.txt"; //getFileName();
 
     read_fd = open(read_filename.c_str(), O_RDONLY|O_NONBLOCK, 0666);
     if (read_fd == -1) {
@@ -92,7 +102,7 @@ int main() {
         cout << "File open successfully!" << endl;
 
         cout << "Write file name" << endl;
-        write_filename = getFileName();
+        write_filename = "/home/milana/Downloads/write_test.txt";//getFileName();
 
         write_fd = open(write_filename.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_NONBLOCK, 0666);
         if (write_fd == -1) {
@@ -123,6 +133,7 @@ int main() {
                     aiocb_read_list[i/2].aio_buf = (void *)buf_list[i / 2].c_str();
                     aiocb_read_list[i/2].aio_nbytes = block_size;
                     aiocb_read_list[i/2].aio_offset = block_size * (i / 2);
+                    cout << "Read offset " << aiocb_read_list[i/2].aio_offset << endl;
                     aiocb_read_list[i/2].aio_sigevent.sigev_notify = SIGEV_THREAD;
                     aiocb_read_list[i/2].aio_sigevent.sigev_value.sival_ptr = &aio_op_list[i];
                     aiocb_read_list[i/2].aio_sigevent.sigev_notify_function = aio_completion_handler;
@@ -141,6 +152,7 @@ int main() {
                     aiocb_write_list[i/2].aio_buf = (void *)buf_list[i / 2].c_str();
                     aiocb_write_list[i/2].aio_nbytes = block_size;
                     aiocb_write_list[i/2].aio_offset = block_size * (i / 2);
+                    cout << "Write offset " << aiocb_write_list[i/2].aio_offset << endl;
                     aiocb_write_list[i/2].aio_sigevent.sigev_notify = SIGEV_THREAD;
                     aiocb_write_list[i/2].aio_sigevent.sigev_value.sival_ptr = &aio_op_list[i];
                     aiocb_write_list[i/2].aio_sigevent.sigev_notify_function = aio_completion_handler;
@@ -153,13 +165,13 @@ int main() {
 
             auto start = chrono::high_resolution_clock::now();  // timer start
 
-            for (int i = 0; i < cnt_aio; i = i + 2) {
+            for (int i = 0; i < cnt_aio * 2; i = i + 2) {
                 if (aio_read(&aio_op_list[i].aio) == -1) {
                     getLastError();
                 }
             }
 
-            while (file_size != 0) {
+            while (cnt_end_aio != cnt_aio) {
                 usleep(10000);
             }
 
